@@ -1,4 +1,5 @@
-semanticscholar>=0.8.4
+arxiv>=2.1.0
 pandas>=2.0.0
 matplotlib>=3.7.0
 textstat>=0.7.3
+tqdm>=4.0.0

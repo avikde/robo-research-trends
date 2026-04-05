@@ -1,6 +1,6 @@
 # Robotics research trends investigation
 
-This project analyzes trends in robotics research publications over time, using paper metadata and abstracts from the [Semantic Scholar API](https://api.semanticscholar.org/). It measures two signals of increasing system complexity:
+This project analyzes trends in robotics research publications over time, using paper metadata and abstracts from the [arXiv API](https://arxiv.org/help/api/index). It measures two signals of increasing system complexity:
 
 1. **Hardware: build vs. buy** — are papers using off-the-shelf commercial robot platforms (Spot, ANYmal, Unitree, Franka, etc.) or building custom hardware? Tracked across legged, aerial, and manipulation robot papers.
 
@@ -26,7 +26,7 @@ pip install -r requirements.txt
 python fetch_data.py
 ```
 
-This queries Semantic Scholar for papers (2010–2025) across three groups:
+This queries arXiv for papers (2010–2025) across three groups:
 
 | Group | Content | Used for |
 |---|---|---|
@@ -68,5 +68,6 @@ Outputs:
 
 - Results are cached: re-running `fetch_data.py` skips queries that already have a file in `data/`. Delete the relevant file to re-fetch.
 - Classification is keyword-based (substring match on title + abstract). A paper can be flagged for both categories (e.g., a paper that fine-tunes a model but also trains a component from scratch). The plots show each signal independently as a % of all papers that year.
-- The Semantic Scholar API is free and requires no API key for moderate usage. For heavier use, register for a free key at [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api).
-- Search results are ranked by Semantic Scholar relevance — treat trends as indicative, not as exhaustive counts.
+- The arXiv API is free and requires no API key. The client enforces a 3-second delay between requests automatically.
+- Search results are ranked by arXiv relevance — treat trends as indicative, not as exhaustive counts.
+- arXiv coverage is thinner before ~2015 (fewer authors posted preprints then), so early data points should be interpreted with more caution.

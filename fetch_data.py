@@ -1,16 +1,16 @@
 """
-Fetch robotics research papers from Semantic Scholar API and cache results locally.
+Fetch robotics and LLM research papers from arXiv and cache results locally.
 
-Three separate query groups are used:
-  hardware        - legged/manipulation/aerial robot papers (for build-vs-buy analysis)
-  robotics_models - robot learning/policy papers (for train-from-scratch vs fine-tune)
-  llm_models      - LLM and foundation model papers (for train-from-scratch vs fine-tune)
+Three query groups:
+  hardware        - cs.RO papers on legged/aerial/manipulation robots (build vs. buy)
+  robotics_models - cs.RO papers on robot learning/policy (fine-tune vs. from scratch)
+  llm_models      - cs.CL/cs.LG papers on LLMs and foundation models
 
 Usage:
     python fetch_data.py                        # Fetch all groups
     python fetch_data.py --groups hardware      # Fetch one group only
-    python fetch_data.py --dry-run              # Print plan without hitting API
-    python fetch_data.py --limit 300            # Papers per query (default: 500)
+    python fetch_data.py --dry-run              # Print plan without fetching
+    python fetch_data.py --limit 500            # Papers per query (default: 500)
 """
 
 import argparse
@@ -18,37 +18,36 @@ import json
 import os
 import time
 
-from semanticscholar import SemanticScholar
+import arxiv
+from tqdm import tqdm
 
 QUERY_GROUPS = {
     "hardware": [
-        ("legged_robots", "legged robot locomotion"),
-        ("quadruped_robots", "quadruped robot"),
-        ("bipedal_humanoid", "bipedal humanoid robot"),
-        ("aerial_robots", "aerial robot UAV"),
-        ("robot_manipulation", "robot manipulation arm"),
+        ("legged_robots",    'cat:cs.RO AND abs:"legged robot"'),
+        ("quadruped_robots", 'cat:cs.RO AND abs:"quadruped"'),
+        ("bipedal_humanoid", 'cat:cs.RO AND (abs:"bipedal" OR abs:"humanoid robot")'),
+        ("aerial_robots",    'cat:cs.RO AND (abs:"aerial robot" OR abs:"quadrotor" OR abs:"UAV")'),
+        ("robot_manipulation", 'cat:cs.RO AND abs:"robot manipulation"'),
     ],
     "robotics_models": [
-        ("robot_learning_policy", "robot learning policy"),
-        ("imitation_learning_robot", "imitation learning robot"),
-        ("rl_locomotion", "reinforcement learning robot locomotion"),
-        ("robot_foundation_model", "robot foundation model"),
+        ("robot_learning",    'cat:cs.RO AND abs:"robot learning"'),
+        ("imitation_learning", 'cat:cs.RO AND abs:"imitation learning"'),
+        ("rl_robot",          'cat:cs.RO AND abs:"reinforcement learning"'),
+        ("robot_foundation",  'cat:cs.RO AND (abs:"foundation model" OR abs:"pretrained" OR abs:"pre-trained")'),
     ],
     "llm_models": [
-        ("llm_pretraining", "large language model pretraining"),
-        ("llm_finetuning", "large language model fine-tuning"),
-        ("foundation_model_training", "foundation model training"),
-        ("vision_language_model", "vision language model"),
+        ("language_model",    '(cat:cs.CL OR cat:cs.LG) AND abs:"language model"'),
+        ("foundation_model",  '(cat:cs.CL OR cat:cs.LG) AND abs:"foundation model"'),
+        ("llm_finetuning",    '(cat:cs.CL OR cat:cs.LG) AND abs:"fine-tuning"'),
+        ("model_pretraining", '(cat:cs.CL OR cat:cs.LG) AND abs:"pretraining"'),
     ],
 }
-
-FIELDS = ["title", "year", "referenceCount", "citationCount", "authors", "abstract"]
 
 YEAR_RANGE = (2010, 2025)
 DATA_DIR = "data"
 
 
-def fetch_query(sch, group, label, query, limit, dry_run):
+def fetch_query(group, label, query, limit, dry_run):
     out_path = os.path.join(DATA_DIR, f"{group}__{label}.json")
 
     if os.path.exists(out_path):
@@ -56,28 +55,35 @@ def fetch_query(sch, group, label, query, limit, dry_run):
         return
 
     if dry_run:
-        print(f"  [dry-run] group={group} label={label} query='{query}' limit={limit}")
+        print(f"  [dry-run] group={group} label={label} limit={limit}")
+        print(f"    query: {query}")
         return
 
-    print(f"  [fetch] {label}: '{query}' ...")
-    results = sch.search_paper(query, fields=FIELDS, limit=limit)
+    print(f"  [fetch] {label} ...")
+    client = arxiv.Client(page_size=100, delay_seconds=3, num_retries=3)
+    search = arxiv.Search(
+        query=query,
+        max_results=limit,
+        sort_by=arxiv.SortCriterion.Relevance,
+    )
 
     papers = []
-    for paper in results:
-        year = paper.year
-        if year is None or not (YEAR_RANGE[0] <= year <= YEAR_RANGE[1]):
-            continue
-        papers.append(
-            {
-                "paperId": paper.paperId,
-                "title": paper.title,
-                "year": year,
-                "referenceCount": paper.referenceCount,
-                "citationCount": paper.citationCount,
-                "authorCount": len(paper.authors) if paper.authors else None,
-                "abstract": paper.abstract or "",
-            }
-        )
+    with tqdm(total=limit, unit="paper") as pbar:
+        for result in client.results(search):
+            pbar.update(1)
+            year = result.published.year
+            if not (YEAR_RANGE[0] <= year <= YEAR_RANGE[1]):
+                continue
+            papers.append(
+                {
+                    "paperId": result.entry_id,
+                    "title": result.title,
+                    "year": year,
+                    "authorCount": len(result.authors),
+                    "abstract": result.summary or "",
+                    "categories": result.categories,
+                }
+            )
 
     print(f"    -> {len(papers)} papers in {YEAR_RANGE[0]}-{YEAR_RANGE[1]}")
     with open(out_path, "w") as f:
@@ -87,7 +93,7 @@ def fetch_query(sch, group, label, query, limit, dry_run):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--limit", type=int, default=500)
+    parser.add_argument("--limit", type=int, default=500, help="Max papers per query (default: 500)")
     parser.add_argument(
         "--groups",
         nargs="+",
@@ -98,14 +104,11 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(DATA_DIR, exist_ok=True)
-    sch = SemanticScholar()
 
     for group in args.groups:
         print(f"\n=== Group: {group} ===")
         for label, query in QUERY_GROUPS[group]:
-            fetch_query(sch, group, label, query, args.limit, args.dry_run)
-            if not args.dry_run:
-                time.sleep(1)
+            fetch_query(group, label, query, args.limit, args.dry_run)
 
     print("\nDone.")
 
