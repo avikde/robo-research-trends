@@ -1,11 +1,11 @@
 """
 Classify papers by build-vs-buy (hardware) and train-from-scratch vs fine-tune (models),
-then plot trends over time.
+then plot trends over time, normalized by papers with empirical demonstrations.
 
 Outputs:
-    figures/hardware_trend.png         - % of papers mentioning commercial vs custom hardware
-    figures/robotics_models_trend.png  - % of robot learning papers mentioning fine-tuning vs from-scratch
-    figures/llm_models_trend.png       - % of LLM papers mentioning fine-tuning vs from-scratch
+    figures/hardware_trend.png         - % of empirical papers mentioning commercial vs custom hardware
+    figures/robotics_models_trend.png  - % of empirical robot learning papers: fine-tuned vs from-scratch
+    figures/llm_models_trend.png       - % of empirical LLM papers: fine-tuned vs from-scratch
     data/hardware_classified.csv
     data/robotics_models_classified.csv
     data/llm_models_classified.csv
@@ -17,14 +17,13 @@ Usage:
 import glob
 import json
 import os
-import re
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
 DATA_DIR = "data"
 FIGURES_DIR = "figures"
-YEAR_RANGE = (2010, 2025)
+YEAR_RANGE = (2015, 2025)
 
 # ---------------------------------------------------------------------------
 # Keyword lists for classification
@@ -71,6 +70,16 @@ SCRATCH_SIGNALS = [
     "from random initialization", "randomly initialized",
 ]
 
+# Language indicating an empirical paper with real experimental demonstrations
+EMPIRICAL_SIGNALS = [
+    "we demonstrate", "we show", "we evaluate", "we validate", "we test",
+    "real robot", "physical robot", "real-world", "hardware experiment",
+    "on a robot", "on the robot", "we deploy", "deployed on",
+    "our experiments", "in experiments", "experiment shows",
+    "results show", "results demonstrate", "we achieve",
+    "benchmark", "evaluation shows",
+]
+
 
 def contains_any(text, keywords):
     text = text.lower()
@@ -94,60 +103,29 @@ def load_group(group_prefix):
     return pd.DataFrame(rows)
 
 
-def classify_hardware(df):
-    text = df["title"] + " " + df["abstract"]
+def classify(df, extra_flags):
+    text = (df["title"] + " " + df["abstract"]).str.lower()
     df = df.copy()
-    df["commercial"] = text.apply(lambda t: contains_any(t, COMMERCIAL_PLATFORMS))
-    df["custom"] = text.apply(lambda t: contains_any(t, CUSTOM_HARDWARE))
+    df["empirical"] = text.apply(lambda t: contains_any(t, EMPIRICAL_SIGNALS))
+    for col, keywords in extra_flags.items():
+        df[col] = text.apply(lambda t: contains_any(t, keywords))
     return df
 
 
-def classify_models(df):
-    text = df["title"] + " " + df["abstract"]
-    df = df.copy()
-    df["pretrained"] = text.apply(lambda t: contains_any(t, PRETRAINED_SIGNALS))
-    df["from_scratch"] = text.apply(lambda t: contains_any(t, SCRATCH_SIGNALS))
-    return df
-
-
-def yearly_pct(df, flag_col):
-    """Return a Series: year -> % of papers with flag_col == True."""
-    grp = df.groupby("year")
+def yearly_pct_of_empirical(df, flag_col):
+    """% of empirical papers per year where flag_col is True."""
+    emp = df[df["empirical"]]
+    grp = emp.groupby("year")
     return (grp[flag_col].sum() / grp[flag_col].count() * 100).rename(flag_col)
 
 
-def plot_hardware(df, out_path):
-    df = df[df["year"].between(*YEAR_RANGE)]
-    years = sorted(df["year"].unique())
-
-    pct_commercial = yearly_pct(df, "commercial")
-    pct_custom = yearly_pct(df, "custom")
-
+def plot_trend(series_list, labels, title, ylabel, out_path):
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(pct_commercial.index, pct_commercial.values, marker="o", label="Commercial platform mentioned")
-    ax.plot(pct_custom.index, pct_custom.values, marker="s", linestyle="--", label="Custom/novel hardware mentioned")
+    styles = [("-", "o"), ("--", "s"), ("-.", "^"), (":", "D")]
+    for (line, marker), series, label in zip(styles, series_list, labels):
+        ax.plot(series.index, series.values, linestyle=line, marker=marker, label=label)
     ax.set_xlabel("Year")
-    ax.set_ylabel("% of papers")
-    ax.set_title("Hardware: commercial platforms vs. custom builds over time")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"  saved {out_path}")
-
-
-def plot_models(df, title, out_path):
-    df = df[df["year"].between(*YEAR_RANGE)]
-
-    pct_pretrained = yearly_pct(df, "pretrained")
-    pct_scratch = yearly_pct(df, "from_scratch")
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(pct_pretrained.index, pct_pretrained.values, marker="o", label="Pre-trained / fine-tuned")
-    ax.plot(pct_scratch.index, pct_scratch.values, marker="s", linestyle="--", label="Trained from scratch")
-    ax.set_xlabel("Year")
-    ax.set_ylabel("% of papers")
+    ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -165,22 +143,33 @@ def main():
     if hw.empty:
         print("No hardware data found. Run: python fetch_data.py --groups hardware")
     else:
-        print(f"Hardware: {len(hw)} papers loaded")
-        hw = classify_hardware(hw)
+        hw = hw[hw["year"].between(*YEAR_RANGE)]
+        hw = classify(hw, {"commercial": COMMERCIAL_PLATFORMS, "custom": CUSTOM_HARDWARE})
         hw.to_csv(os.path.join(DATA_DIR, "hardware_classified.csv"), index=False)
-        plot_hardware(hw, os.path.join(FIGURES_DIR, "hardware_trend.png"))
+        n_empirical = hw[hw["empirical"]].groupby("year").size()
+        print(f"Hardware: {len(hw)} papers, {hw['empirical'].sum()} empirical")
+        plot_trend(
+            [yearly_pct_of_empirical(hw, "commercial"), yearly_pct_of_empirical(hw, "custom")],
+            ["Commercial platform", "Custom/novel hardware"],
+            "Hardware: commercial platforms vs. custom builds\n(% of empirical papers per year)",
+            "% of empirical papers",
+            os.path.join(FIGURES_DIR, "hardware_trend.png"),
+        )
 
     # --- Robotics models ---
     rm = load_group("robotics_models")
     if rm.empty:
         print("No robotics_models data found. Run: python fetch_data.py --groups robotics_models")
     else:
-        print(f"Robotics models: {len(rm)} papers loaded")
-        rm = classify_models(rm)
+        rm = rm[rm["year"].between(*YEAR_RANGE)]
+        rm = classify(rm, {"pretrained": PRETRAINED_SIGNALS, "from_scratch": SCRATCH_SIGNALS})
         rm.to_csv(os.path.join(DATA_DIR, "robotics_models_classified.csv"), index=False)
-        plot_models(
-            rm,
-            "Robot learning: pre-trained/fine-tuned vs. trained from scratch",
+        print(f"Robotics models: {len(rm)} papers, {rm['empirical'].sum()} empirical")
+        plot_trend(
+            [yearly_pct_of_empirical(rm, "pretrained"), yearly_pct_of_empirical(rm, "from_scratch")],
+            ["Pre-trained / fine-tuned", "Trained from scratch"],
+            "Robot learning: pre-trained/fine-tuned vs. trained from scratch\n(% of empirical papers per year)",
+            "% of empirical papers",
             os.path.join(FIGURES_DIR, "robotics_models_trend.png"),
         )
 
@@ -189,12 +178,15 @@ def main():
     if lm.empty:
         print("No llm_models data found. Run: python fetch_data.py --groups llm_models")
     else:
-        print(f"LLM models: {len(lm)} papers loaded")
-        lm = classify_models(lm)
+        lm = lm[lm["year"].between(*YEAR_RANGE)]
+        lm = classify(lm, {"pretrained": PRETRAINED_SIGNALS, "from_scratch": SCRATCH_SIGNALS})
         lm.to_csv(os.path.join(DATA_DIR, "llm_models_classified.csv"), index=False)
-        plot_models(
-            lm,
-            "LLM / foundation models: pre-trained/fine-tuned vs. trained from scratch",
+        print(f"LLM models: {len(lm)} papers, {lm['empirical'].sum()} empirical")
+        plot_trend(
+            [yearly_pct_of_empirical(lm, "pretrained"), yearly_pct_of_empirical(lm, "from_scratch")],
+            ["Pre-trained / fine-tuned", "Trained from scratch"],
+            "LLM / foundation models: pre-trained/fine-tuned vs. trained from scratch\n(% of empirical papers per year)",
+            "% of empirical papers",
             os.path.join(FIGURES_DIR, "llm_models_trend.png"),
         )
 

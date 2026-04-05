@@ -43,7 +43,7 @@ QUERY_GROUPS = {
     ],
 }
 
-YEAR_RANGE = (2010, 2025)
+YEAR_RANGE = (2015, 2025)
 DATA_DIR = "data"
 
 
