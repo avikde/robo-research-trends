@@ -47,27 +47,40 @@ To preview without hitting the API:
 python fetch_data.py --dry-run
 ```
 
-### Step 2: Analyze and plot
+### Step 2: Classify with Gemini (recommended)
+
+```bash
+export GEMINI_API_KEY=your_key_here
+python classify_ml.py
+```
+
+This sends paper abstracts to Gemini in batches and assigns each paper one exhaustive label:
+- **Hardware papers**: `commercial` / `custom` / `simulation` / `no_hardware`
+- **Model papers**: `pretrained` / `scratch` / `no_ml` / `unclear`
+
+Results are cached in `data/ml_classifications.json`. Re-running skips already-classified papers. With ~500 papers per query this takes a few minutes.
+
+### Step 3: Analyze and plot
 
 ```bash
 python analyze.py
 ```
 
-Outputs:
+Uses ML classifications if `data/ml_classifications.json` exists, otherwise falls back to keyword matching. Outputs stacked area charts where categories sum to 100% per year:
 
 | File | Content |
 |---|---|
-| `figures/hardware_trend.png` | % of hardware papers mentioning commercial platforms vs. custom builds per year |
-| `figures/robotics_models_trend.png` | % of robot learning papers mentioning fine-tuning vs. from-scratch per year |
-| `figures/llm_models_trend.png` | % of LLM papers mentioning fine-tuning vs. from-scratch per year |
+| `figures/hardware_trend.png` | Hardware approach breakdown over time |
+| `figures/robotics_models_trend.png` | Model training approach for robot learning papers |
+| `figures/llm_models_trend.png` | Model training approach for LLM/foundation model papers |
 | `data/hardware_classified.csv` | Per-paper classification for hardware group |
 | `data/robotics_models_classified.csv` | Per-paper classification for robotics models group |
 | `data/llm_models_classified.csv` | Per-paper classification for LLM models group |
 
 ## Notes
 
-- Results are cached: re-running `fetch_data.py` skips queries that already have a file in `data/`. Delete the relevant file to re-fetch.
-- Classification is keyword-based (substring match on title + abstract). A paper can be flagged for both categories (e.g., a paper that fine-tunes a model but also trains a component from scratch). The plots show each signal independently as a % of all papers that year.
+- Fetch cache: re-running `fetch_data.py` skips queries that already have a file in `data/`. Delete the relevant file to re-fetch.
+- Classification cache: `data/ml_classifications.json` persists Gemini results. Delete it to re-classify from scratch.
 - The arXiv API is free and requires no API key. The client enforces a 3-second delay between requests automatically.
 - Search results are ranked by arXiv relevance — treat trends as indicative, not as exhaustive counts.
 - arXiv coverage is thinner before ~2015 (fewer authors posted preprints then), so early data points should be interpreted with more caution.
