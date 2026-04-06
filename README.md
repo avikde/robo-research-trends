@@ -6,7 +6,7 @@ This project analyzes trends in robotics research publications over time, using 
 
 2. **Model training: fine-tune vs. from scratch** — are papers fine-tuning pre-trained models or training from scratch? Tracked separately for robot learning papers and LLM/foundation model papers.
 
-The approach is keyword classification on paper abstracts and titles. Each paper is flagged (non-exclusively) for mentions of commercial platforms, custom-build language, pre-trained model language, or from-scratch training language. The plots show the percentage of papers matching each signal per year.
+Each paper's abstract is classified by a Gemini LLM into exhaustive, mutually exclusive categories so that all papers are accounted for and the stacked plots sum to 100% per year.
 
 ## Prerequisites
 
@@ -87,6 +87,41 @@ Uses ML classifications if `data/ml_classifications.json` exists, otherwise fall
 | `data/hardware_classified.csv` | Per-paper classification for hardware group |
 | `data/robotics_models_classified.csv` | Per-paper classification for robotics models group |
 | `data/llm_models_classified.csv` | Per-paper classification for LLM models group |
+
+## Methodology
+
+### Data collection
+
+Papers are fetched from [arXiv](https://arxiv.org) using category-filtered keyword queries (e.g. `cat:cs.RO AND abs:"legged robot"`). arXiv is used because it is free, requires no API key, and has comprehensive coverage of robotics and ML research — particularly post-2015. Only titles and abstracts are available; full paper text is not fetched.
+
+### Classification
+
+Each abstract is classified by Gemini (`gemini-3.1-flash-lite-preview`) into exhaustive, mutually exclusive categories. Two classification tasks are performed on separate paper sets:
+
+**Hardware approach** (applied to `hardware` group papers):
+
+A two-stage prompt is used. First, Gemini is asked to extract the robot platform name(s) mentioned in the abstract, described as specifically as possible — or to infer "unnamed quadrotor", "custom bipedal", etc. if no name is given. Second, it classifies the paper using that extracted platform name:
+
+- `commercial` — the platform can be purchased: identified by a brand name, product name, or model number, even if unfamiliar. Clues include mentions of buying/ordering, version numbers, or reference to a manufacturer.
+- `custom` — the team designed or built the hardware themselves. Clues: "we designed", "we built", "novel hardware", "prototype".
+- `simulation` — all experiments in simulation, no physical robot.
+- `no_hardware` — theoretical, mathematical, or dataset paper; no robot involved.
+
+> **Note:** Hardware classification is the harder of the two tasks and results should be interpreted with caution. Because we only have access to abstracts (not full paper text), platform names that appear only in the experimental setup section are invisible to the classifier. This causes some commercial-platform papers to be miscategorized as `custom` or `unclear`. The two-stage extract-then-classify approach mitigates this by asking the model to name what it can infer, but the `commercial` category is likely undercounted in earlier years when platform names were less likely to appear in abstracts at all. This dimension needs further work before the hardware trend can be considered reliable.
+
+**Model training approach** (applied to `robotics_models` and `llm_models` group papers):
+
+- `pretrained` — uses a pre-trained model, fine-tunes an existing model, applies transfer learning, or builds on a foundation model / LLM / VLM.
+- `scratch` — trains a neural network from scratch (random initialization).
+- `no_ml` — uses classical or non-ML methods only (trajectory optimization, MPC, SLAM, analytical control, etc.).
+- `unclear` — the abstract does not contain enough information to determine the approach.
+
+### Limitations
+
+- Abstract-only: platform names and training details often appear in body sections not visible here.
+- arXiv coverage is thinner before ~2015; early data points have smaller sample sizes.
+- Search results are ranked by arXiv relevance, not exhaustive — the dataset is a sample, not a census.
+- Classification is performed on trimmed abstracts (first 1000 characters).
 
 ## Notes
 
