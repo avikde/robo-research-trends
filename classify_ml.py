@@ -9,9 +9,10 @@ Re-running is safe: already-classified papers are skipped.
 
 Usage:
     export GEMINI_API_KEY=...
-    python classify_ml.py                  # classify all groups
-    python classify_ml.py --groups hardware
-    python classify_ml.py --batch-size 20  # papers per Gemini call (default: 20)
+    python classify_ml.py                           # classify all groups
+    python classify_ml.py --groups hardware         # classify one group only
+    python classify_ml.py --groups hardware --print # print abstracts for a group (no classification)
+    python classify_ml.py --batch-size 20           # papers per Gemini call (default: 20)
 """
 
 import argparse
@@ -35,15 +36,29 @@ BATCH_SIZE = 20
 HARDWARE_GROUPS = {"hardware"}
 MODEL_GROUPS = {"robotics_models", "llm_models"}
 
-HARDWARE_PROMPT = """\
-Classify each robotics paper by its primary hardware approach. Choose exactly one category per paper:
+HARDWARE_EXTRACT_PROMPT = """\
+For each robotics paper, extract the robot platform(s) used in experiments, if any.
+Look for any robot referred to by a specific name, product name, model number, or brand.
+If no specific platform is named, describe what you can infer (e.g. "unnamed quadrotor", "custom bipedal robot").
+If it is a simulation-only or purely theoretical paper, say "simulation" or "none".
 
-- "commercial"   : uses a named off-the-shelf robot platform (e.g. Spot, ANYmal, Unitree A1/Go1/Go2/H1,
-                   Franka/Panda, UR5/UR10, Kuka, Sawyer, Baxter, Kinova, Cassie, Digit, Atlas,
-                   DJI, Crazyflie, or similar)
-- "custom"       : the research team designed, built, or assembled their own robot hardware
-- "simulation"   : all experiments are in simulation; no physical robot is used
-- "no_hardware"  : purely theoretical, mathematical, or dataset/benchmark paper; no robot involved
+Papers:
+{papers_json}
+
+Respond with a JSON array only, no markdown:
+[{{"id": "<id>", "platform": "<platform name or description>"}}, ...]"""
+
+HARDWARE_CLASSIFY_PROMPT = """\
+Classify each robotics paper by its primary hardware approach, given the robot platform identified.
+
+- "commercial"  : the platform is a product that can be purchased — identified by a brand name,
+                  product name, or model number (even if you don't recognize it). Clues: the paper
+                  mentions buying, ordering, or acquiring it; it has a version number or SKU-like name;
+                  or it is referred to as a third-party or manufacturer's product.
+- "custom"      : the research team designed, built, or assembled the robot hardware themselves.
+                  Clues: "we designed", "we built", "novel hardware", "prototype", "custom".
+- "simulation"  : all experiments are in simulation; no physical robot is used.
+- "no_hardware" : purely theoretical, mathematical, or dataset/benchmark paper; no robot involved.
 
 Papers:
 {papers_json}
@@ -116,8 +131,21 @@ def call_gemini(client, prompt_template, batch):
         return future.result(timeout=CALL_TIMEOUT)
 
 
+def call_with_retry(client, prompt_template, batch):
+    for attempt in range(2):
+        try:
+            return call_gemini(client, prompt_template, batch)
+        except concurrent.futures.TimeoutError:
+            tqdm.write(f"    [warn] timed out after {CALL_TIMEOUT}s (attempt {attempt + 1})")
+        except Exception as e:
+            tqdm.write(f"    [warn] failed: {e} (attempt {attempt + 1})")
+        if attempt == 0:
+            time.sleep(5)
+    return None
+
+
 def classify_group(client, group, papers, cache, batch_size):
-    prompt = HARDWARE_PROMPT if group in HARDWARE_GROUPS else MODELS_PROMPT
+    is_hardware = group in HARDWARE_GROUPS
 
     uncached = [p for p in papers if p["id"] not in cache]
     if not uncached:
@@ -128,22 +156,62 @@ def classify_group(client, group, papers, cache, batch_size):
     batches = [uncached[i:i + batch_size] for i in range(0, len(uncached), batch_size)]
 
     for batch in tqdm(batches, unit="batch"):
-        for attempt in range(2):
-            try:
-                results = call_gemini(client, prompt, batch)
-                for item in results:
-                    cache[item["id"]] = item["label"]
-                break
-            except concurrent.futures.TimeoutError:
-                tqdm.write(f"    [warn] batch timed out after {CALL_TIMEOUT}s (attempt {attempt + 1})")
-                if attempt == 0:
-                    time.sleep(5)
-            except Exception as e:
-                tqdm.write(f"    [warn] batch failed: {e} (attempt {attempt + 1})")
-                if attempt == 0:
-                    time.sleep(5)
+        if is_hardware:
+            # Stage 1: extract platform names
+            extracted = call_with_retry(client, HARDWARE_EXTRACT_PROMPT, batch)
+            if extracted is None:
+                continue
+            # Augment batch with extracted platform for stage 2
+            platform_by_id = {item["id"]: item.get("platform", "") for item in extracted}
+            batch2 = [
+                {**p, "abstract": f"Platform: {platform_by_id.get(p['id'], '')}. Abstract: {p['abstract']}"}
+                for p in batch
+            ]
+            # Stage 2: classify using platform info
+            results = call_with_retry(client, HARDWARE_CLASSIFY_PROMPT, batch2)
+        else:
+            results = call_with_retry(client, MODELS_PROMPT, batch)
+
+        if results is None:
+            continue
+
+        for item in results:
+            # store {"label": ..., "platform": ...} for hardware, plain label for models
+            if is_hardware:
+                platform_by_id = {item["id"]: item.get("platform", "") for item in (extracted or [])}
+                cache[item["id"]] = {
+                    "label": item["label"],
+                    "platform": platform_by_id.get(item["id"], ""),
+                }
+            else:
+                cache[item["id"]] = item["label"]
+
         save_cache(cache)
         time.sleep(0.5)
+
+
+def print_abstracts(groups):
+    cache = load_cache()
+    for group in groups:
+        papers = load_papers_for_group(group)
+        if not papers:
+            print(f"[{group}] no data found — run fetch_data.py first")
+            continue
+        print(f"\n{'=' * 60}")
+        print(f"Group: {group}  ({len(papers)} papers)")
+        print(f"{'=' * 60}")
+        for p in papers:
+            entry = cache.get(p["id"])
+            if entry is None:
+                label, platform = "unclassified", ""
+            elif isinstance(entry, dict):
+                label, platform = entry.get("label", "?"), entry.get("platform", "")
+            else:
+                label, platform = entry, ""
+            platform_str = f"  platform: {platform}" if platform else ""
+            print(f"\n[{label}]{platform_str}")
+            print(f"  {p['title']}")
+            print(p["abstract"] or "(no abstract)")
 
 
 def main():
@@ -154,8 +222,13 @@ def main():
         choices=["hardware", "robotics_models", "llm_models"],
         default=["hardware", "robotics_models", "llm_models"],
     )
+    parser.add_argument("--print", action="store_true", help="Print abstracts for the given groups and exit")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     args = parser.parse_args()
+
+    if args.print:
+        print_abstracts(args.groups)
+        return
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:

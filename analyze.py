@@ -91,7 +91,7 @@ def apply_hw_labels(df, ml_cache):
     def classify_row(row):
         ml = ml_cache.get(row["paperId"])
         if ml:
-            return ml
+            return ml["label"] if isinstance(ml, dict) else ml
         text = (row["title"] + " " + row["abstract"]).lower()
         if contains_any(text, COMMERCIAL_PLATFORMS):
             return "commercial"
@@ -134,7 +134,7 @@ def yearly_pct(df, label_col, categories):
 
 
 def plot_stacked(pct, title, out_path):
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(4, 3))
     pct.plot(kind="area", stacked=True, ax=ax, alpha=0.75)
     ax.set_xlabel("Year")
     ax.set_ylabel("% of papers")
@@ -166,7 +166,7 @@ def main():
         print(f"Hardware: {len(hw)} papers\n{pct.round(1).to_string()}\n")
         plot_stacked(
             pct,
-            "Hardware approach over time\n(% of papers per year)",
+            "Hardware approach papers",
             os.path.join(FIGURES_DIR, "hardware_trend.png"),
         )
 
@@ -181,7 +181,7 @@ def main():
         print(f"Robotics models: {len(rm)} papers\n{pct.round(1).to_string()}\n")
         plot_stacked(
             pct,
-            "Robot learning: model training approach over time\n(% of papers per year)",
+            "Robot learning model papers",
             os.path.join(FIGURES_DIR, "robotics_models_trend.png"),
         )
 
@@ -196,7 +196,7 @@ def main():
         print(f"LLM models: {len(lm)} papers\n{pct.round(1).to_string()}\n")
         plot_stacked(
             pct,
-            "LLM / foundation models: training approach over time\n(% of papers per year)",
+            "LLM / foundation models papers",
             os.path.join(FIGURES_DIR, "llm_models_trend.png"),
         )
 

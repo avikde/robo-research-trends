@@ -60,6 +60,17 @@ This sends paper abstracts to Gemini in batches and assigns each paper one exhau
 
 Results are cached in `data/ml_classifications.json`. Re-running skips already-classified papers. With ~500 papers per query this takes a few minutes.
 
+To classify only specific groups:
+```bash
+python classify_ml.py --groups hardware
+python classify_ml.py --groups robotics_models llm_models
+```
+
+To inspect the raw abstracts for a group before or after classifying:
+```bash
+python classify_ml.py --groups hardware --print
+```
+
 ### Step 3: Analyze and plot
 
 ```bash
